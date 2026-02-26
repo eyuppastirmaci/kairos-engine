@@ -1,61 +1,129 @@
 <h1 align="center">Kairos Engine</h1>
 <p align="center">
-  Kotlin-native distributed workflow orchestration engine.
-</p>
-<p align="center">
-  <a href="LICENSE">
-    <img src="https://img.shields.io/badge/license-MIT-f9e2af?style=flat&labelColor=1e1e2e" alt="License: MIT">
-  </a>
-</p>
-<p align="center">
-  <img src="https://img.shields.io/badge/Kotlin-b4befe?style=flat&labelColor=1e1e2e&logo=kotlin&logoColor=white" alt="Kotlin">
-  <img src="https://img.shields.io/badge/Spring%20Boot-a6e3a1?style=flat&labelColor=1e1e2e&logo=springboot&logoColor=white" alt="Spring Boot">
-  <img src="https://img.shields.io/badge/Spring%20WebFlux-94e2d5?style=flat&labelColor=1e1e2e&logo=spring&logoColor=white" alt="Spring WebFlux">
-  <img src="https://img.shields.io/badge/PostgreSQL-89b4fa?style=flat&labelColor=1e1e2e&logo=postgresql&logoColor=white" alt="PostgreSQL">
-  <img src="https://img.shields.io/badge/Redis-f38ba8?style=flat&labelColor=1e1e2e&logo=redis&logoColor=white" alt="Redis">
-  <img src="https://img.shields.io/badge/Apache%20Kafka-a6adc8?style=flat&labelColor=1e1e2e&logo=apachekafka&logoColor=white" alt="Apache Kafka">
-  <img src="https://img.shields.io/badge/gRPC-cba6f7?style=flat&labelColor=1e1e2e&logo=grpc&logoColor=white" alt="gRPC">
-  <img src="https://img.shields.io/badge/OpenTelemetry-fab387?style=flat&labelColor=1e1e2e&logo=opentelemetry&logoColor=white" alt="OpenTelemetry">
+  Kotlin-native workflow orchestration engine.
 </p>
 
 ---
 
-## Why Kairos?
-
-In distributed systems, a single user action can touch dozens of services. When Step 4 out of 7 fails, the first three steps have already made changes — payments charged, inventory reserved, emails sent. Someone needs to undo all of that, in the right order, reliably.
+In distributed systems, a single user action can touch dozens of services. When Step 4 out of 7 fails, the first three steps have already made changes - payments charged, inventory reserved, emails sent. Someone needs to undo all of that, in the right order, reliably.
 
 Existing solutions (Temporal, Camunda, Conductor) solve this but require dedicated infrastructure and steep learning curves. Kairos solves the same problem as an embeddable, Kotlin-native engine that integrates directly into your existing Spring Boot application.
 
 ---
 
-## Planned Features
+## Quick Example
 
-🧩 **Kotlin DSL Workflow Definitions** Define workflows as readable, type-safe Kotlin code. Steps, dependencies, parallel execution groups, compensation actions, and retry policies are all declared in a single, cohesive DSL using lambda with receiver, sealed classes, and reified generics.
+An e-commerce order workflow payment, inventory, shipping, notification with automatic rollback on failure:
 
-📊 **DAG-Based Execution** Steps and their dependencies form a Directed Acyclic Graph. Kairos resolves execution order via topological sort and automatically runs independent steps in parallel using Kotlin Coroutines with structured concurrency.
+```kotlin
+val orderWorkflow = workflow("order-processing") {
 
-🔄 **Smart Retry Strategies** Each step gets its own retry policy: fixed delay, exponential backoff, or exponential backoff with jitter. The engine distinguishes retryable errors (network timeouts, 503s) from permanent failures (validation errors, 400s) and only retries when it makes sense.
+    step("validate-order") {
+        action { ctx ->
+            val order = ctx.input<OrderRequest>()
+            orderValidator.validate(order)
+        }
+        retryPolicy {
+            strategy = RetryStrategy.NONE
+        }
+    }
 
-⏪ **Saga Pattern Compensation** Every step can define a compensation action (its "undo"). When a step fails permanently, Kairos executes all previous compensations in reverse chronological order. If compensation itself fails, the workflow is flagged for manual intervention.
+    step("process-payment") {
+        dependsOn("validate-order")
+        action { ctx ->
+            val order = ctx.input<OrderRequest>()
+            paymentService.charge(order.paymentMethod, order.totalAmount)
+        }
+        compensation { ctx ->
+            val paymentId = ctx.stepOutput<PaymentResult>("process-payment").transactionId
+            paymentService.refund(paymentId)
+        }
+        retryPolicy {
+            strategy = RetryStrategy.EXPONENTIAL_BACKOFF
+            maxRetries = 3
+            baseDelay = 500.milliseconds
+            jitter = true
+        }
+    }
 
-🛡️ **Circuit Breaker** Tracks downstream service health with CLOSED → OPEN → HALF_OPEN states. Prevents cascading failures by stopping requests to services that are clearly down, giving them time to recover.
+    step("reserve-inventory") {
+        dependsOn("validate-order")
+        action { ctx ->
+            val order = ctx.input<OrderRequest>()
+            inventoryService.reserve(order.items)
+        }
+        compensation { ctx ->
+            val reservation = ctx.stepOutput<ReservationResult>("reserve-inventory")
+            inventoryService.release(reservation.reservationId)
+        }
+        retryPolicy {
+            strategy = RetryStrategy.FIXED_DELAY
+            maxRetries = 3
+            baseDelay = 1.seconds
+        }
+    }
 
-📦 **Event Sourced State** Every state change is persisted as an immutable event. This provides a full audit trail, crash recovery (replay from last event), and the ability to reconstruct workflow state at any point in time. PostgreSQL as primary store with optional Redis caching layer.
+    step("arrange-shipping") {
+        dependsOn("process-payment", "reserve-inventory")
+        action { ctx ->
+            val order = ctx.input<OrderRequest>()
+            val reservation = ctx.stepOutput<ReservationResult>("reserve-inventory")
+            shippingService.createShipment(order.shippingAddress, reservation.warehouseId)
+        }
+        compensation { ctx ->
+            val shipment = ctx.stepOutput<ShipmentResult>("arrange-shipping")
+            shippingService.cancel(shipment.shipmentId)
+        }
+    }
 
-📡 **Observability** Micrometer metrics (workflow/step durations, error rates, retry counts), OpenTelemetry distributed tracing (each workflow is a trace, each step is a span), and structured JSON logging with workflow/step correlation IDs.
+    step("send-confirmation") {
+        dependsOn("arrange-shipping")
+        action { ctx ->
+            val order = ctx.input<OrderRequest>()
+            val shipment = ctx.stepOutput<ShipmentResult>("arrange-shipping")
+            notificationService.sendOrderConfirmation(order.customerEmail, shipment.trackingNumber)
+        }
+        // no compensation - an extra email is harmless
+    }
+}
+```
 
-⚡ **Flexible Triggers** Start workflows via REST API, Kafka events, programmatic calls, or cron-like schedules. Every step completion also publishes events to Kafka for downstream consumers.
+Kairos resolves this into a DAG and executes independent steps in parallel:
 
-🔧 **Operational API** Start, pause, resume, cancel, and retry-from-step via REST and gRPC. Exposes workflow status, history, and inconsistency queries for external consumers and monitoring tools.
+```
+                validate-order
+                 /           \
+    process-payment    reserve-inventory
+                 \           /
+              arrange-shipping
+                     |
+             send-confirmation
+```
+
+`process-payment` and `reserve-inventory` run concurrently. If `arrange-shipping` fails permanently, Kairos automatically compensates in reverse order: release inventory → refund payment.
+
+---
+
+## Core Features
+
+🧩 **Kotlin DSL Workflow Definitions** - Define workflows as readable, type-safe Kotlin code. Steps, dependencies, parallel execution groups, compensation actions, and retry policies are all declared in a single, cohesive DSL using lambda with receiver, sealed classes, and reified generics.
+
+📊 **DAG-Based Parallel Execution** - Steps and their dependencies form a Directed Acyclic Graph. Kairos resolves execution order via topological sort and automatically runs independent steps in parallel using Kotlin Coroutines with structured concurrency.
+
+🔄 **Smart Retry Strategies** - Each step gets its own retry policy: fixed delay, exponential backoff, or exponential backoff with jitter. The engine distinguishes retryable errors (network timeouts, 503s) from permanent failures (validation errors, 400s) and only retries when it makes sense.
+
+⏪ **Saga Pattern Compensation** - Every step can define a compensation action (its "undo"). When a step fails permanently, Kairos executes all previous compensations in reverse chronological order. If compensation itself fails, the workflow is flagged for manual intervention.
+
+📦 **Event Sourced State** - Every state change is persisted as an immutable event in PostgreSQL. This provides a full audit trail, crash recovery (replay from last event), and the ability to reconstruct workflow state at any point in time.
 
 ---
 
 ## How It Works
 
 ```
-Trigger (REST / Kafka / Code / Schedule)
-                   │
-                   ▼
+Trigger (REST / Code)
+         │
+         ▼
 ┌─────────────────────────────────────────────┐
 │            Workflow Registry                │
 │   (validated, immutable definitions)        │
@@ -90,10 +158,24 @@ Trigger (REST / Kafka / Code / Schedule)
 | Language | Kotlin |
 | Concurrency | Kotlin Coroutines + Structured Concurrency |
 | Framework | Spring Boot + Spring WebFlux |
-| Messaging | Apache Kafka |
-| State Store | PostgreSQL (primary) + Redis (cache, optional) |
-| API | Spring WebFlux REST + gRPC |
-| Observability | Micrometer + OpenTelemetry + kotlin-logging |
+| State Store | PostgreSQL |
+| API | Spring WebFlux REST |
+| Observability | Micrometer + kotlin-logging |
 | Testing | JUnit 5 + Kotest + Testcontainers + MockK |
+
+---
+
+## Roadmap
+
+Features planned for future releases, roughly in priority order:
+
+| Feature | Description |
+|---|---|
+| 🛡️ Circuit Breaker | CLOSED → OPEN → HALF_OPEN state tracking to prevent cascading failures to unhealthy downstream services. |
+| 📡 Kafka Integration | Start workflows from Kafka events and publish step completion events for downstream consumers. |
+| ⚡ Cron Scheduling | Trigger workflows on cron-like schedules. |
+| 🔧 gRPC API | Full operational API (start, pause, resume, cancel, retry-from-step) over gRPC alongside REST. |
+| 🗄️ Redis Cache Layer | Optional Redis caching for workflow state to reduce PostgreSQL read load. |
+| 📡 OpenTelemetry Tracing | Distributed tracing where each workflow is a trace and each step is a span. |
 
 ---
