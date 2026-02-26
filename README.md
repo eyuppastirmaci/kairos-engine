@@ -1,9 +1,6 @@
 <h1 align="center">Kairos Engine</h1>
 <p align="center">
-  Kotlin-native distributed workflow orchestration engine.<br>
-  Kairos coordinates multi-step,<br>
-  multi-service business processes with built-in fault tolerance, automatic retries,<br>
-  and Saga-based compensation when things go wrong.
+  Kotlin-native distributed workflow orchestration engine.
 </p>
 <p align="center">
   <a href="LICENSE">
