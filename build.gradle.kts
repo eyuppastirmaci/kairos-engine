@@ -30,17 +30,25 @@ dependencies {
 	implementation("org.jetbrains.kotlin:kotlin-reflect")
 	implementation("org.jetbrains.kotlinx:kotlinx-coroutines-reactor")
 	implementation("org.springframework.kafka:spring-kafka")
+	implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core")
+	implementation("io.github.oshai:kotlin-logging-jvm:7.0.7")
+	implementation("org.jetbrains.kotlinx:kotlinx-coroutines-slf4j")
+
 	runtimeOnly("org.postgresql:postgresql")
 	runtimeOnly("org.postgresql:r2dbc-postgresql")
+
 	testImplementation("org.springframework.boot:spring-boot-starter-test")
 	testImplementation("io.projectreactor:reactor-test")
 	testImplementation("org.jetbrains.kotlin:kotlin-test-junit5")
 	testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test")
 	testImplementation("org.springframework.kafka:spring-kafka-test")
+	testImplementation("io.mockk:mockk:1.13.16")
+	testImplementation("io.kotest:kotest-assertions-core:6.0.0.M2")
+
 	testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 }
 
-kotlin {
+kotlin	 {
 	compilerOptions {
 		freeCompilerArgs.addAll("-Xjsr305=strict")
 	}
